@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from async_pay.models import Currency, PaymentStatus
 
@@ -35,7 +35,7 @@ class PaymentResponse(BaseModel):
     description: str | None = None
     metadata: dict[str, Any] = Field(
         default_factory=dict,
-        validation_alias=AliasChoices("metadata", "meta"),
+        validation_alias="meta",
     )
     status: PaymentStatus
     idempotency_key: str
