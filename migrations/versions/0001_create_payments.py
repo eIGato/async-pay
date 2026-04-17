@@ -25,9 +25,7 @@ def upgrade() -> None:
         sa.Column("amount", sa.Numeric(18, 2), nullable=False),
         sa.Column(
             "currency",
-            sa.Enum(
-                "RUB", "USD", "EUR", name="currency", native_enum=False, length=3
-            ),
+            sa.Enum("RUB", "USD", "EUR", name="currency", native_enum=False, length=3),
             nullable=False,
         ),
         sa.Column("description", sa.Text(), nullable=True),

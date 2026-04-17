@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 from datetime import UTC, datetime
@@ -33,13 +34,13 @@ class OutboxPublisher:
     async def start(self) -> None:
         try:
             await setup_topology(self._settings)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("failed to declare rabbitmq topology, will retry on tick")
 
         self._broker = RabbitBroker(self._settings.rabbitmq_url)
         try:
             await self._broker.connect()
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("outbox publisher could not connect to rabbitmq at startup")
 
         self._stop_event.clear()
@@ -49,15 +50,13 @@ class OutboxPublisher:
         self._stop_event.set()
         if self._task is not None:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
             self._task = None
         if self._broker is not None:
             try:
                 await self._broker.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("error while closing rabbitmq broker")
             self._broker = None
 
@@ -68,11 +67,11 @@ class OutboxPublisher:
                 await self._drain_once()
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("outbox publisher tick failed")
             try:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=interval)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
     async def _ensure_broker(self) -> RabbitBroker | None:
@@ -106,7 +105,7 @@ class OutboxPublisher:
                         message_id=str(row.id),
                     )
                     published_ids.append(row.id)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     logger.exception("failed to publish outbox event id=%s", row.id)
 
             if published_ids:

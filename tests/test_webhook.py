@@ -25,9 +25,7 @@ async def test_webhook_success_on_first_attempt(monkeypatch):
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as client:
-        ok = await webhook.deliver_webhook(
-            "https://example.com/hook", _payload(), client=client
-        )
+        ok = await webhook.deliver_webhook("https://example.com/hook", _payload(), client=client)
     assert ok is True
 
 
@@ -42,9 +40,7 @@ async def test_webhook_retries_then_gives_up(monkeypatch):
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as client:
-        ok = await webhook.deliver_webhook(
-            "https://example.com/hook", _payload(), client=client
-        )
+        ok = await webhook.deliver_webhook("https://example.com/hook", _payload(), client=client)
     assert ok is False
     assert calls == webhook.MAX_ATTEMPTS
 
@@ -62,8 +58,6 @@ async def test_webhook_recovers_after_failures(monkeypatch, fail_until):
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport) as client:
-        ok = await webhook.deliver_webhook(
-            "https://example.com/hook", _payload(), client=client
-        )
+        ok = await webhook.deliver_webhook("https://example.com/hook", _payload(), client=client)
     assert ok is True
     assert counter["n"] == fail_until + 1

@@ -59,7 +59,7 @@ def build_app(settings: Settings | None = None) -> FastStream:
     async def _on_startup() -> None:
         try:
             await setup_topology(settings)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("failed to set up rabbitmq topology")
             raise
 

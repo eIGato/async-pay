@@ -37,25 +37,19 @@ async def process_payment_event(
             )
             return
 
-        delay = random.uniform(
-            settings.processing_min_seconds, settings.processing_max_seconds
-        )
+        delay = random.uniform(settings.processing_min_seconds, settings.processing_max_seconds)
         logger.info("processing payment %s (simulated %.2fs)", payment_id, delay)
         await asyncio.sleep(delay)
 
         succeeded = random.random() < settings.success_probability
-        payment.status = (
-            PaymentStatus.SUCCEEDED if succeeded else PaymentStatus.FAILED
-        )
+        payment.status = PaymentStatus.SUCCEEDED if succeeded else PaymentStatus.FAILED
         payment.processed_at = datetime.now(UTC)
         webhook_url = payment.webhook_url
         final_status = payment.status
         processed_at = payment.processed_at
         await session.commit()
 
-    logger.info(
-        "payment %s finalised status=%s", payment_id, final_status.value
-    )
+    logger.info("payment %s finalised status=%s", payment_id, final_status.value)
 
     if webhook_url:
         await deliver_webhook(

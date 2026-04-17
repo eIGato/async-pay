@@ -26,13 +26,13 @@ class Base(DeclarativeBase):
     pass
 
 
-class Currency(str, enum.Enum):
+class Currency(enum.StrEnum):
     RUB = "RUB"
     USD = "USD"
     EUR = "EUR"
 
 
-class PaymentStatus(str, enum.Enum):
+class PaymentStatus(enum.StrEnum):
     PENDING = "pending"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
@@ -72,9 +72,7 @@ class Payment(Base):
         default=_utc_now,
         nullable=False,
     )
-    processed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class OutboxEvent(Base):
