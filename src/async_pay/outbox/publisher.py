@@ -3,13 +3,13 @@ import json
 import logging
 from datetime import UTC, datetime
 
-from faststream.rabbit import RabbitBroker, RabbitExchange, RabbitQueue
-from faststream.rabbit.schemas.exchange import ExchangeType
+from faststream.rabbit import RabbitBroker
 from sqlalchemy import select, update
 
 from async_pay.config import Settings
 from async_pay.db import SessionFactory
 from async_pay.models import OutboxEvent
+from async_pay.rabbit import setup_topology
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,8 @@ class OutboxPublisher:
 
     Runs as a background asyncio task. Idempotency relative to the broker is
     provided by the publish-then-mark flow: any record without ``published_at``
-    is eligible for retry on the next tick.
+    is eligible for retry on the next tick, so an occasional duplicate publish
+    is preferable to a lost event.
     """
 
     def __init__(self, session_factory: SessionFactory, settings: Settings) -> None:
@@ -30,12 +31,17 @@ class OutboxPublisher:
         self._stop_event = asyncio.Event()
 
     async def start(self) -> None:
+        try:
+            await setup_topology(self._settings)
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to declare rabbitmq topology, will retry on tick")
+
         self._broker = RabbitBroker(self._settings.rabbitmq_url)
         try:
             await self._broker.connect()
-            await self._declare_topology(self._broker)
         except Exception:  # noqa: BLE001
-            logger.exception("outbox publisher failed to connect to rabbitmq, will retry")
+            logger.exception("outbox publisher could not connect to rabbitmq at startup")
+
         self._stop_event.clear()
         self._task = asyncio.create_task(self._run(), name="outbox-publisher")
 
@@ -55,27 +61,6 @@ class OutboxPublisher:
                 logger.exception("error while closing rabbitmq broker")
             self._broker = None
 
-    async def _declare_topology(self, broker: RabbitBroker) -> None:
-        settings = self._settings
-        dlx = RabbitExchange(settings.payments_dlx, type=ExchangeType.DIRECT, durable=True)
-        dlq = RabbitQueue(settings.payments_dlq, durable=True, routing_key=settings.payments_dlq_routing_key)
-        main_exchange = RabbitExchange(
-            settings.payments_exchange, type=ExchangeType.DIRECT, durable=True
-        )
-        main_queue = RabbitQueue(
-            settings.payments_queue,
-            durable=True,
-            routing_key=settings.payments_routing_key,
-            arguments={
-                "x-dead-letter-exchange": settings.payments_dlx,
-                "x-dead-letter-routing-key": settings.payments_dlq_routing_key,
-            },
-        )
-        await broker.declare_exchange(dlx)
-        await broker.declare_queue(dlq)
-        await broker.declare_exchange(main_exchange)
-        await broker.declare_queue(main_queue)
-
     async def _run(self) -> None:
         interval = self._settings.outbox_poll_interval
         while not self._stop_event.is_set():
@@ -90,8 +75,13 @@ class OutboxPublisher:
             except asyncio.TimeoutError:
                 continue
 
+    async def _ensure_broker(self) -> RabbitBroker | None:
+        if self._broker is None:
+            return None
+        return self._broker
+
     async def _drain_once(self) -> int:
-        broker = self._broker
+        broker = await self._ensure_broker()
         if broker is None:
             return 0
 
