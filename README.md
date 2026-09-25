@@ -99,6 +99,12 @@ Why:
   `pending`.
 * **Back-pressure isolation.** RabbitMQ outages cannot bring down the API.
 
+Each tick claims its batch with `SELECT ... FOR UPDATE SKIP LOCKED` and holds
+the row locks until the `published_at` update commits, so the API can be scaled
+to several replicas — each with its own publisher task — without two of them
+publishing the same event. Postgres serialises the claim; a replica that finds
+the rows locked simply skips them and takes the next batch.
+
 ## DLQ and retry
 
 Two layers of retry protect the consumer:
