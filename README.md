@@ -124,8 +124,10 @@ Two layers of retry protect the consumer:
    transient outage downstream is not hammered by immediate redeliveries. The
    attempt number is read from the `x-delivery-count` header that quorum queues
    stamp on every redelivery; no attempt counter is kept in the payload.
-2. **Webhook level.** Webhook delivery owns its retry loop: up to 3 attempts
-   with exponential backoff (1s, 2s, 4s). Webhook failures are non-fatal — after the final attempt the error is logged and the RabbitMQ
+2. **Webhook level.** Webhook delivery owns its retry loop: up to
+   `webhook_max_attempts` attempts (default 3) with exponential backoff
+   (`webhook_retry_base_delay` × 1, 2, 4 → 1s, 2s, 4s). Webhook failures are
+   non-fatal — after the final attempt the error is logged and the RabbitMQ
    message is still acked, because the payment has already been finalised in
    the DB. Retrying the message here would re-run the whole handler, and the
    idempotency guard would simply skip the already-finalised payment.

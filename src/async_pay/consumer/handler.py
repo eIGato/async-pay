@@ -60,4 +60,6 @@ async def process_payment_event(
                 processed_at=processed_at,
             ),
             timeout=settings.webhook_timeout_seconds,
+            max_attempts=settings.webhook_max_attempts,
+            retry_base_delay=settings.webhook_retry_base_delay,
         )

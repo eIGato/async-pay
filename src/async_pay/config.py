@@ -30,6 +30,7 @@ class Settings(BaseSettings):
 
     webhook_timeout_seconds: float = 10.0
     webhook_max_attempts: int = 3
+    webhook_retry_base_delay: float = 1.0
 
     processing_min_seconds: float = 2.0
     processing_max_seconds: float = 5.0
