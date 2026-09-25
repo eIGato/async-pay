@@ -1,4 +1,3 @@
-import asyncio
 import logging
 
 from faststream import AckPolicy, FastStream
@@ -6,8 +5,7 @@ from faststream.rabbit import RabbitBroker, RabbitExchange, RabbitMessage, Rabbi
 from faststream.rabbit.schemas.exchange import ExchangeType
 
 from async_pay.config import Settings, get_settings
-from async_pay.consumer.handler import process_payment_event
-from async_pay.consumer.retry import attempts_exhausted, backoff_delay, delivery_attempt
+from async_pay.consumer.handler import handle_message
 from async_pay.db import create_engine, create_session_factory
 from async_pay.logging_config import configure_logging
 from async_pay.rabbit import main_queue_arguments, setup_topology
@@ -36,34 +34,11 @@ def build_app(settings: Settings | None = None) -> FastStream:
         arguments=main_queue_arguments(settings),
     )
 
-    @broker.subscriber(
-        main_queue,
-        main_exchange,
-        ack_policy=AckPolicy.NACK_ON_ERROR,
-    )
+    # MANUAL acking so the last failed attempt can be rejected outright; see
+    # handle_message for why x-delivery-limit alone is one delivery too lenient.
+    @broker.subscriber(main_queue, main_exchange, ack_policy=AckPolicy.MANUAL)
     async def on_payment_created(body: dict, message: RabbitMessage) -> None:
-        attempt = delivery_attempt(message)
-        try:
-            await process_payment_event(body, session_factory, settings)
-        except Exception:
-            if attempts_exhausted(attempt, settings):
-                logger.exception(
-                    "payment event failed on attempt %d/%d, dead-lettering: %s",
-                    attempt,
-                    settings.max_delivery_count,
-                    body,
-                )
-                raise
-            delay = backoff_delay(attempt, settings)
-            logger.exception(
-                "payment event failed on attempt %d/%d, requeueing in %.1fs: %s",
-                attempt,
-                settings.max_delivery_count,
-                delay,
-                body,
-            )
-            await asyncio.sleep(delay)
-            raise
+        await handle_message(body, message, session_factory, settings)
 
     app = FastStream(broker)
 

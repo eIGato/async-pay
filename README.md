@@ -36,6 +36,12 @@ make clean        # stop and wipe the postgres volume
 The API then listens on http://localhost:8000 and the RabbitMQ management UI
 on http://localhost:15672 (guest/guest).
 
+Host ports are overridable, for when 5432 or 8000 is already taken:
+
+```bash
+API_PORT=18000 POSTGRES_PORT=15432 RABBITMQ_MGMT_PORT=25672 make up
+```
+
 ## Local development
 
 ```bash
@@ -138,20 +144,27 @@ the rows locked simply skips them and takes the next batch.
 Two layers of retry protect the consumer:
 
 1. **Message level — 3 attempts, then DLQ.** `payments.new` is a quorum queue
-   with `x-delivery-limit=3`. The subscriber uses
-   `ack_policy=AckPolicy.NACK_ON_ERROR`, so a handler exception nacks the
-   message *with* requeue; RabbitMQ increments the queue's delivery counter and
-   redelivers. Once the counter reaches the limit the message is dead-lettered
-   into `payments.dlx` → `payments.dead` instead of being redelivered again —
-   i.e. a message is dead-lettered after exactly 3 failed attempts. Consumer
-   crashes before ack are counted the same way, so a poison message cannot loop
-   forever.
+   with `x-delivery-limit=3`. The subscriber acks manually
+   (`ack_policy=AckPolicy.MANUAL`) and `handle_message` decides each message's
+   fate: ack on success, nack-with-requeue while attempts remain, and `reject`
+   on the last one — `requeue=False` is what routes it through `payments.dlx`
+   into `payments.dead`.
+
+   The final rejection is deliberate rather than left to `x-delivery-limit`:
+   RabbitMQ dead-letters a message once its delivery count *exceeds* the limit,
+   so a limit of 3 buys 4 deliveries. Rejecting the third attempt ourselves
+   makes "3 attempts" mean exactly three. The queue keeps the limit declared as
+   a backstop for the case this code never gets to run — a consumer that crashes
+   or is killed before acking — so a poison message still cannot loop forever.
 
    Between attempts the handler sleeps with exponential backoff
-   (`consume_retry_base_delay` × 1, 2, 4 → 1s, 2s, 4s) before re-raising, so a
-   transient outage downstream is not hammered by immediate redeliveries. The
-   attempt number is read from the `x-delivery-count` header that quorum queues
-   stamp on every redelivery; no attempt counter is kept in the payload.
+   (`consume_retry_base_delay` × 1, 2, 4 → 1s, 2s, 4s), so a transient outage
+   downstream is not hammered by immediate redeliveries. The attempt number is
+   read from the `x-delivery-count` header that quorum queues stamp on every
+   redelivery; no attempt counter is kept in the payload.
+
+   Failures a retry cannot fix are not retried at all: a payload without a
+   usable `payment_id`, or an id with no matching row, is logged and acked.
 2. **Webhook level.** Webhook delivery owns its retry loop: up to
    `webhook_max_attempts` attempts (default 3) with exponential backoff
    (`webhook_retry_base_delay` × 1, 2, 4 → 1s, 2s, 4s). Webhook failures are
@@ -176,3 +189,37 @@ make dlq          # docker compose exec consumer python -m async_pay.tools.dlq
 which `basic.get`s the messages, prints each body together with its `x-death`
 history, and nacks them all back onto the queue. The queue is also visible in
 the RabbitMQ management UI at http://localhost:15672.
+
+## Verifying the retry path by hand
+
+The 10% simulated decline is a business outcome, so to exercise the retry and
+DLQ machinery you need a message the handler genuinely cannot process. Publish
+one with an unusable id straight onto the exchange:
+
+```bash
+docker compose exec -T consumer python - <<'EOF'
+import asyncio, json, aio_pika
+from async_pay.config import get_settings
+
+async def main():
+    s = get_settings()
+    conn = await aio_pika.connect_robust(s.rabbitmq_url)
+    ch = await conn.channel()
+    ex = await ch.get_exchange(s.payments_exchange)
+    await ex.publish(
+        aio_pika.Message(json.dumps({"payment_id": "not-a-uuid"}).encode()),
+        routing_key=s.payments_routing_key,
+    )
+    await conn.close()
+
+asyncio.run(main())
+EOF
+
+docker compose logs consumer | grep attempt
+# attempt 1/3, requeueing in 1.0s
+# attempt 2/3, requeueing in 2.0s
+# attempt 3/3, dead-lettering
+
+make dlq
+# [1] message_id=... deaths=[{'count': 1, 'reason': 'rejected', ...}] body={"payment_id": "not-a-uuid"}
+```
