@@ -109,7 +109,8 @@ payment under a unique index:
   and creating a new one would defeat the key entirely. The comparison is on
   the business fields — amount, currency, description, metadata, webhook URL —
   so `100.5` and `100.50` are the same request, as are metadata objects that
-  differ only in key order.
+  differ only in key order and URLs that differ only in `HttpUrl` normalisation
+  (`https://example.com` vs `https://example.com/`).
 * **Concurrent duplicates** — the unique index is the arbiter: the losing
   transaction catches the `IntegrityError`, re-reads the winner's row and
   replays it through the same comparison.

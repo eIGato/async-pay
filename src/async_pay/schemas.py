@@ -39,7 +39,10 @@ class PaymentResponse(BaseModel):
     )
     status: PaymentStatus
     idempotency_key: str
-    webhook_url: str | None = None
+    # HttpUrl, same as on the request: the column only ever holds a string that
+    # CreatePaymentRequest already validated and normalised, so the round-trip
+    # is stable and the OpenAPI schema says the same thing on both sides.
+    webhook_url: HttpUrl | None = None
     created_at: datetime
     processed_at: datetime | None = None
 

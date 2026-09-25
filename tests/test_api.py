@@ -202,3 +202,91 @@ async def test_health_reports_503_when_the_database_is_down(app, client, monkeyp
 
     assert response.status_code == 503
     assert response.json()["database"] == "unreachable"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/hook",
+        "https://example.com/hook?token=abc",
+        "http://hooksink:9000/hook",
+        "https://example.com:8443/deep/path",
+    ],
+)
+async def test_webhook_url_survives_the_round_trip(client, url):
+    """HttpUrl on the way in and out must not rewrite what the client sent."""
+    idem = str(uuid4())
+    create = await client.post(
+        "/api/v1/payments",
+        json={"amount": "1.00", "currency": "RUB", "webhook_url": url},
+        headers={"X-API-Key": API_KEY, "Idempotency-Key": idem},
+    )
+    assert create.status_code == 202
+
+    body = (
+        await client.get(
+            f"/api/v1/payments/{create.json()['payment_id']}",
+            headers={"X-API-Key": API_KEY},
+        )
+    ).json()
+
+    assert body["webhook_url"] == url
+    assert isinstance(body["webhook_url"], str)
+
+
+async def test_webhook_url_is_null_when_omitted(client):
+    idem = str(uuid4())
+    create = await client.post(
+        "/api/v1/payments",
+        json={"amount": "1.00", "currency": "RUB"},
+        headers={"X-API-Key": API_KEY, "Idempotency-Key": idem},
+    )
+
+    body = (
+        await client.get(
+            f"/api/v1/payments/{create.json()['payment_id']}",
+            headers={"X-API-Key": API_KEY},
+        )
+    ).json()
+
+    assert body["webhook_url"] is None
+
+
+async def test_bare_host_webhook_url_is_normalised(client):
+    """A host with no path gains a trailing slash — HttpUrl normalises on the
+    way in, and the normalised form is what gets stored and returned."""
+    idem = str(uuid4())
+    create = await client.post(
+        "/api/v1/payments",
+        json={"amount": "1.00", "currency": "RUB", "webhook_url": "https://example.com"},
+        headers={"X-API-Key": API_KEY, "Idempotency-Key": idem},
+    )
+
+    body = (
+        await client.get(
+            f"/api/v1/payments/{create.json()['payment_id']}",
+            headers={"X-API-Key": API_KEY},
+        )
+    ).json()
+
+    assert body["webhook_url"] == "https://example.com/"
+
+
+async def test_normalised_webhook_url_is_not_an_idempotency_conflict(client):
+    """`https://example.com` and `https://example.com/` are the same URL, so a
+    replay that spells it the other way must not be rejected as a changed body."""
+    idem = str(uuid4())
+    headers = {"X-API-Key": API_KEY, "Idempotency-Key": idem}
+    first = await client.post(
+        "/api/v1/payments",
+        json={"amount": "1.00", "currency": "RUB", "webhook_url": "https://example.com"},
+        headers=headers,
+    )
+    second = await client.post(
+        "/api/v1/payments",
+        json={"amount": "1.00", "currency": "RUB", "webhook_url": "https://example.com/"},
+        headers=headers,
+    )
+
+    assert second.status_code == 202
+    assert second.json()["payment_id"] == first.json()["payment_id"]
