@@ -103,16 +103,31 @@ Why:
 
 Two layers of retry protect the consumer:
 
-1. **RabbitMQ level.** `payments.new` is a quorum queue with
-   `x-delivery-limit=3`. If the handler raises an unhandled exception the
-   message is nacked without requeue (`retry=False` on the FastStream
-   subscriber) and RabbitMQ dead-letters it into `payments.dlx` →
-   `payments.dead`. Consumer crashes before ack are also bounded by the
-   delivery limit so a poison message cannot loop forever.
+1. **Message level — 3 attempts, then DLQ.** `payments.new` is a quorum queue
+   with `x-delivery-limit=3`. The subscriber uses
+   `ack_policy=AckPolicy.NACK_ON_ERROR`, so a handler exception nacks the
+   message *with* requeue; RabbitMQ increments the queue's delivery counter and
+   redelivers. Once the counter reaches the limit the message is dead-lettered
+   into `payments.dlx` → `payments.dead` instead of being redelivered again —
+   i.e. a message is dead-lettered after exactly 3 failed attempts. Consumer
+   crashes before ack are counted the same way, so a poison message cannot loop
+   forever.
+
+   Between attempts the handler sleeps with exponential backoff
+   (`consume_retry_base_delay` × 1, 2, 4 → 1s, 2s, 4s) before re-raising, so a
+   transient outage downstream is not hammered by immediate redeliveries. The
+   attempt number is read from the `x-delivery-count` header that quorum queues
+   stamp on every redelivery; no attempt counter is kept in the payload.
 2. **Webhook level.** Webhook delivery owns its retry loop: up to 3 attempts
-   with exponential backoff (1s, 2s, 4s). Webhook failures are non-fatal —
-   after the final attempt the error is logged and the RabbitMQ message is
-   still acked, because the payment has already been finalised in the DB.
+   with exponential backoff (1s, 2s, 4s). Webhook failures are non-fatal — after the final attempt the error is logged and the RabbitMQ
+   message is still acked, because the payment has already been finalised in
+   the DB. Retrying the message here would re-run the whole handler, and the
+   idempotency guard would simply skip the already-finalised payment.
+
+Note that a *simulated gateway decline* (the 10% path) is a business outcome,
+not a failure: the payment is finalised as `failed`, the webhook reports that
+status and the message is acked. Only infrastructure errors — an unreachable
+database, malformed payloads, bugs — feed the retry/DLQ machinery above.
 
 Dead-lettered messages can be inspected via the `payments.dead` queue in the
 RabbitMQ management UI. The consumer also attaches a lightweight subscriber

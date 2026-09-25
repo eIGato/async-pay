@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     success_probability: float = 0.9
 
     max_delivery_count: int = 3
+    consume_retry_base_delay: float = 1.0
 
 
 @lru_cache(maxsize=1)
