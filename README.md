@@ -80,6 +80,34 @@ curl -s http://localhost:8000/api/v1/payments/<payment_id> \
   -H "X-API-Key: secret-api-key" | jq
 ```
 
+Health probe (unauthenticated, used by the compose healthcheck):
+
+```bash
+curl -s http://localhost:8000/health | jq   # {"status":"ok","database":"ok"}
+```
+
+Returns `503` with `{"status":"unhealthy","database":"unreachable"}` when the
+database cannot be reached, so `consumer` waits for a genuinely ready API
+rather than merely a started container.
+
+## Idempotency
+
+`Idempotency-Key` is required on `POST /api/v1/payments` and is stored on the
+payment under a unique index:
+
+* **Same key, same body** — `202` with the original `payment_id`; no second
+  payment and no second outbox event. A client that retries after a timeout
+  gets the result of its first call.
+* **Same key, different body** — `409 Conflict`. Silently returning the old
+  payment would hide a real client bug (a reused key for a different charge),
+  and creating a new one would defeat the key entirely. The comparison is on
+  the business fields — amount, currency, description, metadata, webhook URL —
+  so `100.5` and `100.50` are the same request, as are metadata objects that
+  differ only in key order.
+* **Concurrent duplicates** — the unique index is the arbiter: the losing
+  transaction catches the `IntegrityError`, re-reads the winner's row and
+  replays it through the same comparison.
+
 ## Outbox pattern
 
 The API never talks to RabbitMQ inline with the request. Instead, writing a

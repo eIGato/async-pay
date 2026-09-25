@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from async_pay.api.routes import health as health_router
 from async_pay.api.routes import payments as payments_router
 from async_pay.config import Settings
 from async_pay.db import SessionFactory
@@ -49,6 +50,7 @@ async def app(settings: Settings, session_factory: SessionFactory) -> FastAPI:
     fast = FastAPI()
     fast.state.settings = settings
     fast.state.session_factory = session_factory
+    fast.include_router(health_router.router)
     fast.include_router(payments_router.router)
     return fast
 
