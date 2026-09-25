@@ -129,6 +129,14 @@ not a failure: the payment is finalised as `failed`, the webhook reports that
 status and the message is acked. Only infrastructure errors — an unreachable
 database, malformed payloads, bugs — feed the retry/DLQ machinery above.
 
-Dead-lettered messages can be inspected via the `payments.dead` queue in the
-RabbitMQ management UI. The consumer also attaches a lightweight subscriber
-to that queue so every dead-letter is surfaced in the application log.
+The consumer deliberately does **not** subscribe to `payments.dead`: a DLQ that
+is consumed is a DLQ that is empty, and the point of the queue is to retain what
+failed until somebody looks at it. Inspect it without draining it with
+
+```bash
+make dlq          # docker compose exec consumer python -m async_pay.tools.dlq
+```
+
+which `basic.get`s the messages, prints each body together with its `x-death`
+history, and nacks them all back onto the queue. The queue is also visible in
+the RabbitMQ management UI at http://localhost:15672.

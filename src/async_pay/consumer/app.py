@@ -36,17 +36,6 @@ def build_app(settings: Settings | None = None) -> FastStream:
         arguments=main_queue_arguments(settings),
     )
 
-    dlx = RabbitExchange(
-        settings.payments_dlx,
-        type=ExchangeType.DIRECT,
-        durable=True,
-    )
-    dlq = RabbitQueue(
-        settings.payments_dlq,
-        durable=True,
-        routing_key=settings.payments_dlq_routing_key,
-    )
-
     @broker.subscriber(
         main_queue,
         main_exchange,
@@ -75,10 +64,6 @@ def build_app(settings: Settings | None = None) -> FastStream:
             )
             await asyncio.sleep(delay)
             raise
-
-    @broker.subscriber(dlq, dlx, ack_policy=AckPolicy.REJECT_ON_ERROR)
-    async def on_dead_letter(body: dict) -> None:
-        logger.error("dead-lettered payment event: %s", body)
 
     app = FastStream(broker)
 
