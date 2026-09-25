@@ -13,6 +13,32 @@ logger = logging.getLogger(__name__)
 PAYMENT_CREATED_EVENT = "payment.created"
 
 
+class IdempotencyConflictError(Exception):
+    """An Idempotency-Key was replayed with a different request body."""
+
+    def __init__(self, payment_id: UUID) -> None:
+        super().__init__(f"idempotency key already used for payment {payment_id}")
+        self.payment_id = payment_id
+
+
+def request_matches(payment: Payment, request: CreatePaymentRequest) -> bool:
+    """Whether ``request`` is a faithful replay of the one that created ``payment``."""
+    webhook_url = str(request.webhook_url) if request.webhook_url else None
+    return (
+        payment.amount == request.amount
+        and payment.currency == request.currency
+        and payment.description == request.description
+        and payment.meta == request.metadata
+        and payment.webhook_url == webhook_url
+    )
+
+
+def _replay(payment: Payment, request: CreatePaymentRequest) -> tuple[Payment, bool]:
+    if not request_matches(payment, request):
+        raise IdempotencyConflictError(payment.id)
+    return payment, False
+
+
 async def create_or_get_payment(
     session: AsyncSession,
     idempotency_key: str,
@@ -22,7 +48,7 @@ async def create_or_get_payment(
         select(Payment).where(Payment.idempotency_key == idempotency_key)
     )
     if existing is not None:
-        return existing, False
+        return _replay(existing, request)
 
     payment = Payment(
         amount=request.amount,
@@ -44,7 +70,7 @@ async def create_or_get_payment(
         )
         if existing is None:
             raise
-        return existing, False
+        return _replay(existing, request)
 
     session.add(
         OutboxEvent(

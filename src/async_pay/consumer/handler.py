@@ -4,7 +4,10 @@ import random
 from datetime import UTC, datetime
 from uuid import UUID
 
+from faststream.rabbit import RabbitMessage
+
 from async_pay.config import Settings
+from async_pay.consumer.retry import attempts_exhausted, backoff_delay, delivery_attempt
 from async_pay.consumer.webhook import deliver_webhook
 from async_pay.db import SessionFactory
 from async_pay.models import Payment, PaymentStatus
@@ -60,4 +63,47 @@ async def process_payment_event(
                 processed_at=processed_at,
             ),
             timeout=settings.webhook_timeout_seconds,
+            max_attempts=settings.webhook_max_attempts,
+            retry_base_delay=settings.webhook_retry_base_delay,
         )
+
+
+async def handle_message(
+    body: dict,
+    message: RabbitMessage,
+    session_factory: SessionFactory,
+    settings: Settings,
+) -> None:
+    """Process one message, deciding its fate explicitly.
+
+    Acks on success. On failure, nacks with requeue and an exponential backoff
+    until ``max_delivery_count`` attempts are spent, then rejects so the broker
+    dead-letters it. The last attempt is rejected here rather than left to
+    ``x-delivery-limit``, which costs one delivery too many: RabbitMQ
+    dead-letters a message once its delivery count *exceeds* the limit.
+    """
+    attempt = delivery_attempt(message)
+    try:
+        await process_payment_event(body, session_factory, settings)
+    except Exception:
+        if attempts_exhausted(attempt, settings):
+            logger.exception(
+                "payment event failed on attempt %d/%d, dead-lettering: %s",
+                attempt,
+                settings.max_delivery_count,
+                body,
+            )
+            await message.reject()
+            return
+        delay = backoff_delay(attempt, settings)
+        logger.exception(
+            "payment event failed on attempt %d/%d, requeueing in %.1fs: %s",
+            attempt,
+            settings.max_delivery_count,
+            delay,
+            body,
+        )
+        await asyncio.sleep(delay)
+        await message.nack(requeue=True)
+        return
+    await message.ack()

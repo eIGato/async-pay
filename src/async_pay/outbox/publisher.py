@@ -3,6 +3,7 @@ import contextlib
 import json
 import logging
 from datetime import UTC, datetime
+from uuid import UUID
 
 from faststream.rabbit import RabbitBroker
 from sqlalchemy import select, update
@@ -22,6 +23,10 @@ class OutboxPublisher:
     provided by the publish-then-mark flow: any record without ``published_at``
     is eligible for retry on the next tick, so an occasional duplicate publish
     is preferable to a lost event.
+
+    Each batch is claimed with ``SELECT ... FOR UPDATE SKIP LOCKED`` so several
+    API replicas can run their own publisher without publishing one another's
+    rows.
     """
 
     def __init__(self, session_factory: SessionFactory, settings: Settings) -> None:
@@ -84,17 +89,21 @@ class OutboxPublisher:
         if broker is None:
             return 0
 
-        async with self._session_factory() as session:
+        # One transaction for the whole batch: the rows stay row-locked from the
+        # SELECT until the published_at UPDATE commits, so a concurrent worker
+        # skips them instead of publishing the same events a second time.
+        async with self._session_factory() as session, session.begin():
             rows = (
                 await session.scalars(
                     select(OutboxEvent)
                     .where(OutboxEvent.published_at.is_(None))
                     .order_by(OutboxEvent.created_at)
                     .limit(self._settings.outbox_batch_size)
+                    .with_for_update(skip_locked=True)
                 )
             ).all()
 
-            published_ids: list = []
+            published_ids: list[UUID] = []
             for row in rows:
                 try:
                     await broker.publish(
@@ -114,7 +123,6 @@ class OutboxPublisher:
                     .where(OutboxEvent.id.in_(published_ids))
                     .values(published_at=datetime.now(UTC))
                 )
-                await session.commit()
                 logger.info("published %d outbox events", len(published_ids))
 
             return len(published_ids)

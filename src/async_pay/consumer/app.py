@@ -1,11 +1,11 @@
 import logging
 
-from faststream import FastStream
-from faststream.rabbit import RabbitBroker, RabbitExchange, RabbitQueue
+from faststream import AckPolicy, FastStream
+from faststream.rabbit import RabbitBroker, RabbitExchange, RabbitMessage, RabbitQueue
 from faststream.rabbit.schemas.exchange import ExchangeType
 
 from async_pay.config import Settings, get_settings
-from async_pay.consumer.handler import process_payment_event
+from async_pay.consumer.handler import handle_message
 from async_pay.db import create_engine, create_session_factory
 from async_pay.logging_config import configure_logging
 from async_pay.rabbit import main_queue_arguments, setup_topology
@@ -34,24 +34,11 @@ def build_app(settings: Settings | None = None) -> FastStream:
         arguments=main_queue_arguments(settings),
     )
 
-    dlx = RabbitExchange(
-        settings.payments_dlx,
-        type=ExchangeType.DIRECT,
-        durable=True,
-    )
-    dlq = RabbitQueue(
-        settings.payments_dlq,
-        durable=True,
-        routing_key=settings.payments_dlq_routing_key,
-    )
-
-    @broker.subscriber(main_queue, main_exchange, retry=False)
-    async def on_payment_created(body: dict) -> None:
-        await process_payment_event(body, session_factory, settings)
-
-    @broker.subscriber(dlq, dlx, retry=False)
-    async def on_dead_letter(body: dict) -> None:
-        logger.error("dead-lettered payment event: %s", body)
+    # MANUAL acking so the last failed attempt can be rejected outright; see
+    # handle_message for why x-delivery-limit alone is one delivery too lenient.
+    @broker.subscriber(main_queue, main_exchange, ack_policy=AckPolicy.MANUAL)
+    async def on_payment_created(body: dict, message: RabbitMessage) -> None:
+        await handle_message(body, message, session_factory, settings)
 
     app = FastStream(broker)
 

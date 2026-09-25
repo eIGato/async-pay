@@ -35,9 +35,20 @@ async def create_payment(
     idempotency_key: str = Depends(require_idempotency_key),
     session: AsyncSession = Depends(get_session),
 ) -> CreatePaymentResponse:
-    payment, created = await payment_service.create_or_get_payment(
-        session, idempotency_key, request
-    )
+    try:
+        payment, created = await payment_service.create_or_get_payment(
+            session, idempotency_key, request
+        )
+    except payment_service.IdempotencyConflictError as exc:
+        logger.warning(
+            "idempotency key reused with a different body key=%s payment_id=%s",
+            idempotency_key,
+            exc.payment_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Idempotency-Key was already used with a different request body",
+        ) from exc
     if created:
         logger.info("payment created id=%s idempotency_key=%s", payment.id, idempotency_key)
     else:

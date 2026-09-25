@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from async_pay.api.routes import health as health_router
 from async_pay.api.routes import payments as payments_router
 from async_pay.config import Settings, get_settings
 from async_pay.db import create_engine, create_session_factory
@@ -37,6 +38,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logger.info("application stopped")
 
     app = FastAPI(title="async-pay", version="0.1.0", lifespan=lifespan)
+    app.include_router(health_router.router)
     app.include_router(payments_router.router)
     return app
 

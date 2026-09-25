@@ -1,4 +1,4 @@
-.PHONY: up down logs build restart clean ps fmt lint test install hooks
+.PHONY: up down logs build restart clean ps fmt lint test install hooks dlq
 
 COMPOSE := docker compose
 
@@ -39,3 +39,6 @@ lint:
 
 test:
 	pytest
+
+dlq:
+	$(COMPOSE) exec consumer python -m async_pay.tools.dlq
